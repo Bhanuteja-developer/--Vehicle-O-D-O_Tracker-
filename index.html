@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vehicle ODO Tracker</title>
+    
+    <!-- Tailwind CSS for Styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Leaflet CSS & JS for the Map -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <!-- Tesseract.js for OCR (Optical Character Recognition) -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+    <style>
+        /* Theme Variables */
+        :root {
+            --bg-color: #f3f4f6; /* Smoke White Default */
+            --text-color: #111827;
+            --card-bg: #ffffff;
+            --accent-color: #3b82f6;
+            --accent-hover: #2563eb;
+            --border-color: #e5e7eb;
+        }
+
+        [data-theme="black"] {
+            --bg-color: #000000;
+            --text-color: #f3f4f6;
+            --card-bg: #111827;
+            --accent-color: #4b5563;
+            --accent-hover: #374151;
+            --border-color: #374151;
+        }
+
+        [data-theme="neon"] {
+            --bg-color: #0a0a0a;
+            --text-color: #39ff14; /* Neon Green */
+            --card-bg: #171717;
+            --accent-color: #000000;
+            --accent-hover: #111111;
+            --border-color: #39ff14;
+            --shadow-neon: 0 0 10px #39ff14, inset 0 0 10px #39ff14;
+        }
+
+        /* Base Body Styles applied from Variables */
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            transition: all 0.3s ease;
+        }
+
+        .theme-card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            box-shadow: var(--shadow-neon, 0 4px 6px -1px rgba(0, 0, 0, 0.1));
+        }
+
+        .theme-btn {
+            background-color: var(--accent-color);
+            color: var(--bg-color) === #0a0a0a ? var(--text-color) : #fff; /* adjust for neon */
+            border: 1px solid var(--border-color);
+            box-shadow: var(--shadow-neon, none);
+        }
+        
+        [data-theme="neon"] .theme-btn {
+            color: #39ff14;
+        }
+
+        .theme-btn:hover {
+            background-color: var(--accent-hover);
+        }
+
+        .theme-input {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            border: 1px solid var(--border-color);
+        }
+
+        /* Blinking Red Rectangle for Camera */
+        .blinking-box {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 80%;
+            height: 150px;
+            border: 4px solid red;
+            box-shadow: 0 0 15px red, inset 0 0 15px red;
+            animation: blink 1s infinite;
+            pointer-events: none; /* Let clicks pass through */
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; border-color: red; }
+            50% { opacity: 0.2; border-color: darkred; }
+        }
+
+        #map {
+            height: 200px;
+            width: 100%;
+            z-index: 1; /* Keep map below overlays */
+        }
+        
+        .hidden-canvas {
+            display: none;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center p-4 font-sans" data-theme="smoke">
+
+    <!-- REQUIRED: Replace with your deployed Google Apps Script Web App URL -->
+    <script>
+        const GOOGLE_APP_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyP2dwspi_3L1W5ARBP0WCpnecQfcBlUOY1JLFxWN2mmCBE2ANLckzpq_u4MBFPSjPI/exec';
+    </script>
+
+    <div class="w-full max-w-md w-full">
+        
+        <!-- Header -->
+        <div class="text-center mb-6">
+            <h1 class="text-3xl font-bold mb-2">Vehicle ODO Tracker</h1>
+            <p class="text-sm italic opacity-80">"Tracking every miles, securing every journeys."</p>
+        </div>
+
+        <!-- Theme Switcher -->
+        <div class="flex justify-center gap-2 mb-8">
+            <button onclick="setTheme('smoke')" class="px-3 py-1 rounded border border-gray-400 bg-gray-100 text-gray-800 text-xs shadow">Smoke White</button>
+            <button onclick="setTheme('black')" class="px-3 py-1 rounded border border-gray-600 bg-black text-white text-xs shadow">Black</button>
+            <button onclick="setTheme('neon')" class="px-3 py-1 rounded border border-green-500 bg-gray-900 text-green-400 text-xs shadow" style="box-shadow: 0 0 5px #39ff14;">Neon</button>
+        </div>
+
+        <!-- Loading Overlay (Location / Processing) -->
+        <div id="loading-overlay" class="hidden fixed inset-0 bg-black bg-opacity-70 z-50 flex flex-col items-center justify-center text-white">
+            <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-white mb-4"></div>
+            <p id="loading-text">Getting live location...</p>
+        </div>
+
+        <!-- MAIN MENU -->
+        <div id="main-menu" class="theme-card rounded-xl p-6 flex flex-col gap-4">
+            <h2 class="text-xl font-semibold mb-2 text-center border-b pb-2" style="border-color: var(--border-color)">Select Action</h2>
+            
+            <button onclick="openForm('opening')" class="theme-btn w-full py-4 rounded-lg font-bold text-lg transition duration-200">
+                1. ODO Reading - Opening
+            </button>
+            
+            <button onclick="openForm('closing')" class="theme-btn w-full py-4 rounded-lg font-bold text-lg transition duration-200">
+                2. ODO Reading - Closing
+            </button>
+            
+            <button onclick="openForm('petrol')" class="theme-btn w-full py-4 rounded-lg font-bold text-lg transition duration-200">
+                3. Petrol Reserve
+            </button>
+        </div>
+
+        <!-- ACTION FORM -->
+        <div id="action-form" class="hidden theme-card rounded-xl p-6 flex flex-col gap-4">
+            
+            <div class="flex justify-between items-center mb-2 border-b pb-2" style="border-color: var(--border-color)">
+                <button onclick="goBack()" class="font-bold underline text-sm">&larr; Back</button>
+                <h2 id="form-title" class="text-lg font-bold uppercase tracking-wider">Form Title</h2>
+            </div>
+
+            <!-- Calendar / Time Display -->
+            <div class="text-center font-mono text-sm opacity-90 mb-2" id="datetime-display">
+                Loading date & time...
+            </div>
+
+            <!-- Map Section -->
+            <div class="border rounded-lg overflow-hidden" style="border-color: var(--border-color)">
+                <div id="map"></div>
+            </div>
+            
+            <!-- Location Details -->
+            <div class="text-xs p-2 rounded theme-input mb-2">
+                <strong>Lat/Lng:</strong> <span id="coords-display">Fetching...</span><br>
+                <strong>Address:</strong> <span id="address-display">Fetching...</span>
+            </div>
+
+            <!-- Camera Capture Section -->
+            <button id="btn-start-camera" onclick="startCamera()" class="theme-btn w-full py-3 rounded-lg font-bold mt-2 flex justify-center items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M4 5a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2V7a2 2 0 00-2-2h-1.586a1 1 0 01-.707-.293l-1.121-1.121A2 2 0 0011.172 3H8.828a2 2 0 00-1.414.586L6.293 4.707A1 1 0 015.586 5H4zm6 9a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd" />
+                </svg>
+                <span id="btn-camera-text">Capture ODO Automatically</span>
+            </button>
+
+            <!-- Video Stream Container (Hidden initially) -->
+            <div id="camera-container" class="hidden relative w-full bg-black rounded-lg overflow-hidden border mt-2" style="border-color: var(--border-color)">
+                <video id="video-stream" class="w-full h-auto" autoplay playsinline></video>
+                <div class="blinking-box"></div>
+                <button onclick="takeSnapshot()" class="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-white text-black px-6 py-2 rounded-full font-bold shadow-lg border-2 border-gray-400 z-10">
+                    Snap & Read
+                </button>
+            </div>
+            
+            <canvas id="snapshot-canvas" class="hidden-canvas"></canvas>
+
+            <!-- Reading Input -->
+            <div class="mt-4">
+                <label class="block text-sm font-bold mb-1" id="reading-label">Reading Value</label>
+                <input type="number" id="reading-input" class="w-full p-3 rounded-lg theme-input text-lg font-bold text-center" placeholder="e.g. 14500" required>
+                <p class="text-xs opacity-70 mt-1 text-center">You can manually edit if camera OCR reading is incorrect.</p>
+            </div>
+
+            <!-- Captured Image Preview -->
+            <div id="image-preview-container" class="hidden mt-2 border rounded-lg p-2" style="border-color: var(--border-color)">
+                <p class="text-xs font-bold mb-1">Image Reference:</p>
+                <img id="image-preview" src="" alt="Captured ODO" class="w-full h-auto rounded">
+            </div>
+
+            <!-- Submit -->
+            <button onclick="submitData()" class="w-full py-4 rounded-lg font-bold text-lg mt-4 bg-green-600 hover:bg-green-700 text-white shadow-lg">
+                Save and Submit
+            </button>
+
+        </div>
+    </div>
+
+    <script>
+        // --- State Variables ---
+        let currentTheme = 'smoke';
+        let currentFormType = ''; // 'opening', 'closing', 'petrol'
+        let locationData = { lat: '', lng: '', address: '' };
+        let map = null;
+        let mapMarker = null;
+        let videoStream = null;
+        let capturedImageDataUrl = '';
+
+        // --- Theme Management ---
+        function setTheme(theme) {
+            currentTheme = theme;
+            document.body.setAttribute('data-theme', theme);
+        }
+
+        // --- Time Management ---
+        setInterval(() => {
+            const now = new Date();
+            const dateStr = now.toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+            const timeStr = now.toLocaleTimeString('en-US');
+            const dtElement = document.getElementById('datetime-display');
+            if (dtElement) dtElement.innerText = `${dateStr} | ${timeStr}`;
+        }, 1000);
+
+        // --- Geolocation & Map ---
+        // Force asking for location every time app loads/refreshes
+        function fetchLocation() {
+            showLoading("Requesting Location Permission...");
+            if (navigator.geolocation) {
+                // Increased timeout to 30000ms (30s) to give phones more time to grab GPS signal
+                navigator.geolocation.getCurrentPosition(
+                    positionSuccess, 
+                    positionError, 
+                    { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 }
+                );
+            } else {
+                alert("Geolocation is not supported by this browser.");
+                hideLoading();
+            }
+        }
+
+        function positionSuccess(position) {
+            locationData.lat = position.coords.latitude;
+            locationData.lng = position.coords.longitude;
+            
+            document.getElementById('coords-display').innerText = `${locationData.lat.toFixed(6)}, ${locationData.lng.toFixed(6)}`;
+            
+            // Reverse Geocoding using OpenStreetMap Nominatim API (Free, no key needed)
+            showLoading("Fetching Address Details...");
+            fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${locationData.lat}&lon=${locationData.lng}`)
+                .then(response => response.json())
+                .then(data => {
+                    locationData.address = data.display_name || "Address not found";
+                    document.getElementById('address-display').innerText = locationData.address;
+                    initMap(locationData.lat, locationData.lng);
+                    hideLoading();
+                })
+                .catch(err => {
+                    console.error(err);
+                    locationData.address = "Failed to load address.";
+                    document.getElementById('address-display').innerText = locationData.address;
+                    initMap(locationData.lat, locationData.lng);
+                    hideLoading();
+                });
+        }
+
+        function positionError(error) {
+            hideLoading();
+            
+            let errorMessage = "Location permission denied or unavailable.";
+            
+            switch(error.code) {
+                case error.PERMISSION_DENIED:
+                    errorMessage = "Location Permission Denied. If you are opening this file locally on a phone, the browser blocks location for security. You must host this file on a secure HTTPS server to use GPS.";
+                    break;
+                case error.POSITION_UNAVAILABLE:
+                    errorMessage = "Location information is unavailable. Check your device GPS signal.";
+                    break;
+                case error.TIMEOUT:
+                    errorMessage = "The request to get user location timed out. Try moving to an area with better GPS reception.";
+                    break;
+            }
+            
+            alert(errorMessage + "\n\nYou can still use the app, but location data will be missing.");
+            
+            // Fallback so the app doesn't break
+            locationData.lat = "Unknown";
+            locationData.lng = "Unknown";
+            locationData.address = "Location blocked or unavailable.";
+            
+            document.getElementById('coords-display').innerText = "Unavailable";
+            document.getElementById('address-display').innerText = "Unavailable";
+            
+            // Default map view (e.g. Center of the world/ocean) so map doesn't crash
+            initMap(0, 0);
+        }
+
+        function initMap(lat, lng) {
+            if (!map) {
+                map = L.map('map').setView([lat, lng], 15);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '&copy; OpenStreetMap contributors'
+                }).addTo(map);
+                mapMarker = L.marker([lat, lng]).addTo(map);
+            } else {
+                map.setView([lat, lng], 15);
+                mapMarker.setLatLng([lat, lng]);
+            }
+            // Fix map rendering issues inside hidden divs
+            setTimeout(() => { map.invalidateSize(); }, 500); 
+        }
+
+        // Run location fetch on app load
+        window.onload = () => {
+            fetchLocation();
+        };
+
+        // --- UI Flow ---
+        function openForm(type) {
+            currentFormType = type;
+            document.getElementById('main-menu').classList.add('hidden');
+            document.getElementById('action-form').classList.remove('hidden');
+            
+            // Re-render map to fix sizing
+            if (map) { setTimeout(() => { map.invalidateSize(); }, 100); }
+            
+            // Reset form fields
+            document.getElementById('reading-input').value = '';
+            document.getElementById('image-preview-container').classList.add('hidden');
+            capturedImageDataUrl = '';
+            stopCamera(); // Ensure camera is off
+
+            let title = '';
+            let btnText = '';
+            let labelText = '';
+
+            if (type === 'opening') {
+                title = 'Opening ODO Reading';
+                btnText = 'Capture Opening ODO';
+                labelText = 'Opening Reading Value';
+            } else if (type === 'closing') {
+                title = 'Closing ODO Reading';
+                btnText = 'Capture Closing ODO';
+                labelText = 'Closing Reading Value';
+            } else if (type === 'petrol') {
+                title = 'Petrol Reserve Entry';
+                btnText = 'Capture Petrol Reserve Reading';
+                labelText = 'Petrol Reserve Reading';
+            }
+
+            document.getElementById('form-title').innerText = title;
+            document.getElementById('btn-camera-text').innerText = btnText;
+            document.getElementById('reading-label').innerText = labelText;
+        }
+
+        function goBack() {
+            stopCamera();
+            document.getElementById('action-form').classList.add('hidden');
+            document.getElementById('main-menu').classList.remove('hidden');
+        }
+
+        // --- Camera & OCR Logic ---
+        async function startCamera() {
+            // "App should ask the user for permission every time when he click the button"
+            // Browsers remember permissions, but requesting getUserMedia invokes the camera explicitly.
+            document.getElementById('camera-container').classList.remove('hidden');
+            document.getElementById('btn-start-camera').classList.add('hidden');
+            
+            const video = document.getElementById('video-stream');
+            
+            try {
+                // Request back camera
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: "environment" }, 
+                    audio: false 
+                });
+                video.srcObject = stream;
+                videoStream = stream;
+            } catch (err) {
+                alert("Camera permission denied or camera not found. Please enable it or host via HTTPS.");
+                console.error(err);
+                stopCamera();
+            }
+        }
+
+        function stopCamera() {
+            if (videoStream) {
+                videoStream.getTracks().forEach(track => track.stop());
+                videoStream = null;
+            }
+            document.getElementById('camera-container').classList.add('hidden');
+            document.getElementById('btn-start-camera').classList.remove('hidden');
+        }
+
+        function takeSnapshot() {
+            const video = document.getElementById('video-stream');
+            const canvas = document.getElementById('snapshot-canvas');
+            const context = canvas.getContext('2d');
+
+            if (!videoStream) return;
+
+            // FIX: Scale down the image to a max width of 800px to ensure fast upload and avoid payload limits
+            const MAX_WIDTH = 800;
+            let width = video.videoWidth;
+            let height = video.videoHeight;
+
+            if (width > MAX_WIDTH) {
+                height = Math.floor((height * MAX_WIDTH) / width);
+                width = MAX_WIDTH;
+            }
+
+            // Set canvas size to match scaled video
+            canvas.width = width;
+            canvas.height = height;
+            context.drawImage(video, 0, 0, width, height);
+
+            // Get Image Data - using 0.6 quality for better compression
+            capturedImageDataUrl = canvas.toDataURL('image/jpeg', 0.6);
+
+            // Show Preview
+            document.getElementById('image-preview').src = capturedImageDataUrl;
+            document.getElementById('image-preview-container').classList.remove('hidden');
+
+            // Stop Camera
+            stopCamera();
+
+            // Run OCR
+            runOCR(capturedImageDataUrl);
+        }
+
+        function runOCR(imageData) {
+            showLoading("Analyzing ODO Reading (OCR)...");
+            
+            Tesseract.recognize(
+                imageData,
+                'eng',
+                { logger: m => console.log(m) } // Optional: log progress
+            ).then(({ data: { text } }) => {
+                hideLoading();
+                // Strip out anything that isn't a number
+                const numbersOnly = text.replace(/[^0-9]/g, '');
+                if (numbersOnly) {
+                    document.getElementById('reading-input').value = numbersOnly;
+                } else {
+                    alert("OCR could not clearly detect numbers. Please enter the reading manually.");
+                }
+            }).catch(err => {
+                hideLoading();
+                console.error(err);
+                alert("OCR failed. Please enter the reading manually.");
+            });
+        }
+
+        // --- Submission Logic ---
+        function submitData() {
+            const reading = document.getElementById('reading-input').value;
+            
+            if (!reading) {
+                alert("Please enter or capture a reading value before submitting.");
+                return;
+            }
+            
+            if (GOOGLE_APP_SCRIPT_URL === 'YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL_HERE') {
+                alert("DEVELOPER NOTE: You must replace GOOGLE_APP_SCRIPT_URL in the HTML with your actual Google Apps Script Web App URL to save data.");
+                return;
+            }
+
+            const payload = {
+                type: currentFormType,
+                timestamp: new Date().toISOString(),
+                dateStr: new Date().toLocaleDateString('en-US'),
+                reading: reading,
+                lat: locationData.lat,
+                lng: locationData.lng,
+                address: locationData.address,
+                image: capturedImageDataUrl // base64 string
+            };
+
+            showLoading("Saving data to Google Sheets...");
+
+            fetch(GOOGLE_APP_SCRIPT_URL, {
+                method: 'POST',
+                // Mode 'no-cors' is often required when sending to Google Apps Script without complex CORS setup,
+                // but 'no-cors' means you can't read the response. 
+                // Alternatively, use standard post with 'text/plain' to avoid preflight issues.
+                body: JSON.stringify(payload),
+                headers: {
+                    "Content-Type": "text/plain;charset=utf-8",
+                }
+            })
+            .then(response => {
+                hideLoading();
+                alert("Data Saved Successfully!");
+                goBack();
+            })
+            .catch(error => {
+                hideLoading();
+                console.error('Error:', error);
+                alert("Data submitted, but an error occurred receiving the response. Check your Google Sheet.");
+                goBack();
+            });
+        }
+
+        // --- Utils ---
+        function showLoading(text) {
+            document.getElementById('loading-text').innerText = text;
+            document.getElementById('loading-overlay').classList.remove('hidden');
+        }
+
+        function hideLoading() {
+            document.getElementById('loading-overlay').classList.add('hidden');
+        }
+
+    </script>
+</body>
+</html>
